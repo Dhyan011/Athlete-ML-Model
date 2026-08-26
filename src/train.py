@@ -46,12 +46,13 @@ def run_training(features_path='processed_data/master_features_v2.csv', models_d
 
         # Task A: XGBoost Classifier
         clf = xgb.XGBClassifier(
-            n_estimators=350,
-            learning_rate=0.025,
-            max_depth=5,
-            subsample=0.85,
-            colsample_bytree=0.8,
-            scale_pos_weight=1.2,
+            n_estimators=500,
+            learning_rate=0.015,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.7,
+            min_child_weight=5,
+            scale_pos_weight=1.3,
             random_state=42 + fold,
             eval_metric='logloss'
         )

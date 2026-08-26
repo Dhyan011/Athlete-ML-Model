@@ -19,6 +19,9 @@ def extract_advanced_features(data_dir='dataset(31)', is_train=True):
     meta_df['is_contact_sport'] = meta_df['sport'].isin(['Football', 'Basketball']).astype(int)
     meta_df['is_racket_sport'] = meta_df['sport'].isin(['Tennis', 'Badminton']).astype(int)
     meta_df['is_high_impact_sport'] = meta_df['sport'].isin(['Football', 'Basketball', 'Athletics']).astype(int)
+    meta_df['has_prior_injury'] = (meta_df['prior_season_injury_count'] > 0).astype(int)
+    meta_df['prior_x_age'] = meta_df['prior_season_injury_count'] * meta_df['age']
+    meta_df['prior_x_contact'] = meta_df['prior_season_injury_count'] * meta_df['is_contact_sport']
     
     # 2. Daily Activity (Observation Window: Days 1 to 30)
     print(">>> 2. Processing Daily Workload Dynamics (Days 1 to 30)...")
@@ -96,6 +99,23 @@ def extract_advanced_features(data_dir='dataset(31)', is_train=True):
     daily_feats['step_spike_ratio'] = daily_feats['daily_TotalSteps_max'] / (daily_feats['daily_TotalSteps_mean'] + 1e-5)
     daily_feats['step_spike_delta'] = daily_feats['daily_TotalSteps_max'] - daily_feats['daily_TotalSteps_mean']
     daily_feats['trimp_spike_delta'] = daily_feats['daily_daily_trimp_max'] - daily_feats['daily_daily_trimp_mean']
+    
+    # Overload Streaks (Consecutive days > 1.3x median)
+    athlete_medians = daily_obs.groupby('Id')['TotalSteps'].median().reset_index().rename(columns={'TotalSteps': 'median_steps'})
+    daily_obs_streak = daily_obs.merge(athlete_medians, on='Id')
+    daily_obs_streak['above_median'] = (daily_obs_streak['TotalSteps'] > daily_obs_streak['median_steps'] * 1.3).astype(int)
+    
+    def _calc_max_streak(series):
+        max_s, curr = 0, 0
+        for v in series:
+            if v == 1: curr += 1
+            else: curr = 0
+            max_s = max(max_s, curr)
+        return max_s
+        
+    streak_s = daily_obs_streak.groupby('Id')['above_median'].apply(_calc_max_streak).reset_index()
+    streak_s.columns = ['athlete_id', 'max_overload_streak']
+    daily_feats = daily_feats.merge(streak_s, on='athlete_id', how='left')
     
     # 3. Sleep Architecture & Cumulative Sleep Debt
     print(">>> 3. Processing Sleep Architecture & Deficits...")

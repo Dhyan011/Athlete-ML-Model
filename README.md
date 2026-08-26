@@ -46,31 +46,33 @@ Computed from `Athlete Metadata.csv` joined with `Train Labels Dataset.csv` on t
 
 ---
 
-## ⚙️ 3. Feature Engineering (121 Features)
+## ⚙️ 3. Feature Engineering (125 Features)
 
 All features extracted strictly from the **30-day observation window** (Days 1–30). Zero data leakage verified.
 
 | Module | Key Features |
 | :--- | :--- |
-| **Workload & ACWR** | Acute (7d) vs Chronic (30d) step/calorie/intensity ratios, peak spike delta, Week 4 vs Week 1 ramp rate |
+| **Workload & ACWR** | Acute (7d) vs Chronic (30d) step/calorie/intensity ratios, peak spike delta, Week 4 vs Week 1 ramp rate, overload streaks |
 | **Training Load** | Foster's Monotony & Strain, TRIMP proxy (weighted active minutes), session frequency/duration/type ratios |
 | **Sleep** | Sleep efficiency, regularity (CV), cumulative deficit below 480 min, severe deprivation day count, Week 4 sleep drop |
 | **Heart Rate** | Nocturnal resting HR (2–6 AM), peak exertion HR, heart rate reserve, cardiac strain hours (>140 bpm) |
-| **Baselines** | BMI, age, experience ratio, sport type encoding, contact sport flag, prior injury count |
+| **Baselines & Interactions** | BMI, age, experience ratio, sport type encoding, contact sport flag, prior injury count interactions |
 
 ---
 
-## 🧠 4. Model Architecture
+## 🧠 4. Model Architecture & Ablation Trail
 
 **Standalone XGBoost** trained via 5-fold Stratified Cross-Validation.
 
-| Component | Configuration |
-| :--- | :--- |
-| **Task A Classifier** | `XGBClassifier(n_estimators=350, lr=0.025, max_depth=5, subsample=0.85, scale_pos_weight=1.2)` |
-| **Task B1 Onset Regressor** | `XGBRegressor(n_estimators=200, lr=0.03, max_depth=4)` — trained on injured subset only |
-| **Task B2 Recovery Regressor** | `XGBRegressor(n_estimators=200, lr=0.03, max_depth=4)` — trained on injured subset only |
+### Ablation Experiments (5-Fold Out-of-Fold)
 
-**Why a single model, not an ensemble?** Ablation showed a 4-model blend (LightGBM+XGBoost+CatBoost+ExtraTrees) provided only +0.0008 F1 improvement over standalone XGBoost, with no AUC gain. A single model is simpler to explain, faster to train, and easier to reproduce.
+| Experiment / Configuration | OOF ROC-AUC | OOF F1 (at best $t$) | Brier Score | Outcome & Decision |
+| :--- | :---: | :---: | :---: | :--- |
+| **A. Baseline Pipeline (121 feats)** | 0.7618 | 0.6543 | 0.1515 | Reference baseline with scale_pos_weight=1.2 |
+| **B. +Feature Fixes & Interactions (125 feats)** | 0.7625 | 0.6562 | 0.1504 | **KEPT**: Added overload streak & prior injury interactions; improved calibration |
+| **C. +HP Tuning (depth=6, lr=0.015, mcw=5)** | 0.7631 | 0.6528 | 0.1508 | **KEPT**: Regularized deeper trees with conservative learning rate |
+| **D. +Class Imbalance Sweep (SPW=1.3)** | 0.7635 | 0.6539 | 0.1510 | **KEPT**: Optimal recall tradeoff for competition penalty structure |
+| **E. 4-Model Blend (LGBM+XGB+Cat+ET)** | 0.7593 | 0.6570 | 0.1518 | **DISCARDED**: Added complexity without meaningful generalization gain (+0.0008 F1, worse AUC) |
 
 ---
 
@@ -80,23 +82,23 @@ All features extracted strictly from the **30-day observation window** (Days 1�
 
 | Metric | Value |
 | :--- | :--- |
-| **ROC-AUC** | **0.7618** |
-| **F1-Score** | **0.5450** (at competition-optimal threshold) |
-| **Precision** | **39.44%** |
-| **Recall** | **88.19%** |
+| **ROC-AUC** | **0.7594 – 0.7635** |
+| **F1-Score** | **0.5393** (at competition-optimal threshold 0.15) / **0.6500** (at F1-optimal threshold 0.53) |
+| **Precision** | **38.46%** (at $t=0.15$) |
+| **Recall** | **90.19%** (at $t=0.15$) |
 | **Decision Threshold** | **0.15** |
 
 ### Timing Metrics (Task B)
 
 | Metric | Value | Baseline (Mean Prediction) |
 | :--- | :--- | :--- |
-| **Onset MAE (penalized, all injured)** | **5.62 days** | 7.61 days |
-| **Onset Skill Score** | **0.2625** | 0.0 |
-| **Recovery MAE (penalized, all injured)** | **6.14 days** | 3.24 days |
+| **Onset MAE (penalized, all injured)** | **5.14 days** | 7.61 days |
+| **Onset Skill Score** | **0.3251** (+32.5% vs baseline) | 0.0 |
+| **Recovery MAE (penalized, all injured)** | **5.59 days** | 3.24 days |
 | **Recovery Skill Score** | **0.0000** | 0.0 |
-| **Composite Competition Score** | **0.2692** | — |
+| **Composite Competition Score** | **0.2881** | — |
 
-### Why Threshold = 0.15 Instead of 0.48
+### Why Threshold = 0.15 Instead of 0.53
 
 The competition penalizes missed injuries with a fixed 30-day error on both timing predictions. This asymmetric penalty makes recall far more valuable than precision:
 
