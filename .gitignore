@@ -1,0 +1,27 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Raw and Processed Large Datasets
+dataset(31)/
+processed_data/
+*.zip
+
+# CatBoost and temp logs
+catboost_info/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# OS Specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
