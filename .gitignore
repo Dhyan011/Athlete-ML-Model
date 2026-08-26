@@ -8,6 +8,9 @@ dataset(31)/
 processed_data/
 *.zip
 
+# Archived old pipeline code
+archived/
+
 # CatBoost and temp logs
 catboost_info/
 

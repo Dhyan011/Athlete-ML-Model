@@ -1,164 +1,118 @@
-# 🏃 PLAYHACK ML Track — Multi-Modal Athlete Injury Risk & Recovery Trajectory Forecasting
-**IIT Guwahati Sports Board X Technical Board Hackathon**
-
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Ensemble: LightGBM+XGBoost+CatBoost](https://img.shields.io/badge/Ensemble-LightGBM%20%7C%20XGBoost%20%7C%20CatBoost-orange)](https://github.com/Dhyan011/Athlete-ML-Model)
+# 🏃 PLAYHACK ML Track — Athlete Injury Risk & Recovery Duration Forecasting
+**IIT Guwahati Sports Board × Technical Board Hackathon**
 
 ---
 
-## 📖 Executive Summary
-This repository contains the end-to-end Machine Learning pipeline for predicting **athlete injury susceptibility**, **injury onset timing**, and **rehabilitation/recovery duration** across 3,000 professional athletes in 6 distinct sports (Football, Badminton, Athletics, Tennis, Basketball, and Volleyball).
+## 📖 Summary
+Predicts **athlete injury risk**, **injury onset timing**, and **rehabilitation duration** for 3,000 athletes across 6 sports, using 30 days of wearable biometric data to forecast outcomes in the following 30-day risk window.
 
-The solution strictly adheres to a **zero-leakage temporal constraint**, mining rich physiological signals from a **30-Day Observation Window** to forecast outcomes in a future **30-Day Risk Horizon**.
+**Model**: Standalone XGBoost (5-fold cross-validated).  
+**Threshold**: Optimized for the competition's composite scoring metric (not F1 alone), deliberately favouring high recall to avoid the severe 30-day False Negative penalty.
 
 ---
 
-## 🎯 1. Problem Formulation & Prediction Targets
+## 🎯 1. Problem & Targets
 
 ```
-                         DAY 1 to 30                           DAY 31 to 60
-                  ┌───────────────────────────────┐        ┌───────────────────────────────┐
-                  │      OBSERVATION WINDOW       │        │          RISK WINDOW          │
-                  │   Full Telemetry Available    │  ───►  │     Target Prediction Zone    │
-                  │  (Biometrics, HR, Sleep, etc.)│        │  (Injury, Onset Day, Recovery)│
-                  └───────────────────────────────┘        └───────────────────────────────┘
+        DAY 1–30 (Observation)              DAY 31–60 (Risk Window)
+   ┌───────────────────────────┐       ┌───────────────────────────┐
+   │  Wearable telemetry used  │  ──►  │   Predict these targets   │
+   │  for feature engineering  │       │   (no data available)     │
+   └───────────────────────────┘       └───────────────────────────┘
 ```
 
-The system outputs three targets for each athlete:
-
-| Target Name | Type | Description | Valid Range / Distribution |
+| Target | Type | Range | Description |
 | :--- | :--- | :--- | :--- |
-| **`injured_in_risk_window`** (Task A) | Binary Classification | Predicts whether an injury onset occurs during Days 31 to 60. | `0` (Non-Injured, 65%) or `1` (Injured, 35%) |
-| **`onset_day_offset`** (Task B1) | Integer / Regression | Exact day during the risk window when the injury begins (Day 1 = Day 31 overall). | Integer in `[1, 30]` (Required for all athletes) |
-| **`recovery_duration`** (Task B2) | Integer / Regression | Number of recovery/rehabilitation days sidelining the athlete before returning to play. | Integer in `[5, 20]` (Required for all athletes) |
+| `injured_in_risk_window` | Binary | 0 or 1 | Will the athlete get injured in Days 31–60? (Base rate: 35%) |
+| `onset_day_offset` | Integer | 1–30 | Which day in the risk window does the injury begin? |
+| `recovery_duration` | Integer | 5–20 | How many days until the athlete returns to play? |
 
-> **⚠️ Leaderboard Scoring Rule**: A missed injury (**False Negative**) triggers a severe **fixed penalty of 30 days** applied to *both* timing predictions:
-> $$\text{Error}_{\text{onset}} = \begin{cases} |\hat{t}_{\text{onset}} - t_{\text{onset}}| & \text{if } \hat{y} = 1 \\ 30 & \text{if } \hat{y} = 0 \text{ and } y = 1 \end{cases}$$
-> Skill Score is computed against the training-set mean baseline: $\text{Skill} = \max\left(0, 1 - \frac{\text{MAE}_{\text{model}}}{\text{MAE}_{\text{baseline}}}\right)$.
+**Scoring rule**: A missed injury (False Negative) triggers a fixed **30-day penalty** on both timing predictions, making recall critical.
 
 ---
 
-## 🔬 2. Exploratory Data Analysis & Domain Discoveries
+## 🔬 2. Key Data Findings (Verified)
 
-Analysis across 180k daily activity logs, 180k sleep records, 112k training sessions, and 4.1+ million high-frequency hourly heart rate records revealed distinct physiological signatures:
+### Workload Spike Signature
+Injured athletes showed a **+44.84%** higher peak single-day step count during the observation window (14,982 vs 10,344 steps; two-sample t-test: $t = 26.25$, $p = 7.31 \times 10^{-137}$).
 
-### A. The Peak Workload Spike Signature (+44.84%)
-Athletes who suffered injuries exhibited unmanaged single-day acute workload surges during Month 1:
-* **Injured Athletes Peak Daily Steps**: **14,982 steps**
-* **Uninjured Athletes Peak Daily Steps**: **10,344 steps**
-* **Relative Surge**: **$+44.84\%$** ($p < 0.001$)
+### Recovery Duration Bimodality by Sport
+Computed from `Athlete Metadata.csv` joined with `Train Labels Dataset.csv` on the injured subset:
 
-### B. Recovery Duration Bimodality by Sport Category
-Rehabilitation times are distinctly governed by mechanical impact and contact demands:
-* **Contact / Field Sports (Football & Basketball)**: Mean recovery = **$14.1 - 14.5$ days** (Min 8, Max 20).
-* **Court / Non-Contact Sports (Badminton, Tennis, Athletics, Volleyball)**: Mean recovery = **$9.9 - 10.3$ days** (Min 5, Max 15).
-
-### C. Autonomic Fatigue & Sleep Deficits
-* **Resting Heart Rate Elevation**: Injured athletes show higher nocturnal minimum heart rate (2:00 AM – 6:00 AM) due to incomplete autonomic recovery.
-* **Sleep Regularity Index**: High variance in nightly sleep duration and acute dips ($< 360$ minutes) strongly amplify soft-tissue failure risk.
-
----
-
-## 🛠️ 3. Feature Engineering Architecture
-
-A comprehensive sports science feature extraction pipeline generates **100+ high-resolution indicators** strictly from Days 1 to 30:
-
-```
-                                  MASTER FEATURE MATRIX (3,000 × 100+)
-                                                  │
-         ┌──────────────────┬─────────────────────┼─────────────────────┬──────────────────┐
-         ▼                  ▼                     ▼                     ▼                  ▼
-┌──────────────────┐┌──────────────────┐┌──────────────────┐┌──────────────────┐┌──────────────────┐
-│  Workload & ACWR ││ Sleep Architecture││Cardiovascular HR ││ Training Sessions││Athlete Baselines │
-│- Acute 7d Volume ││- Sleep Efficiency││- Nocturnal RHR   ││- Session Count   ││- Baseline BMI    │
-│- Chronic 30d Vol ││- Sleep Debt Index││  (2 AM – 6 AM)   ││- Training Hours  ││- Experience Ratio│
-│- ACWR Ratio      ││- Sleep CV (Var)  ││- Peak Exertion HR││- Scrimmage Ratio ││- Sport Dummy Enc │
-│- Step Spike Delta││- Severe Sleep Dip││- HR Reserve      ││- Gym Ratio       ││- Prior Injury Idx│
-│- Foster Monotony ││- Week 4 vs Month ││- Cardiac Strain  ││- Frequency/Week  ││- Contact Status  │
-│- Foster Strain   ││  Sleep Ratio     ││  Hours (>140bpm) ││- Duration Means  ││- BMI Drift       │
-└──────────────────┘└──────────────────┘└──────────────────┘└──────────────────┘└──────────────────┘
-```
-
-1. **Acute-to-Chronic Workload Ratio (ACWR)**:
-   $$\text{ACWR} = \frac{\text{Acute Load (Last 7 Days)}}{\text{Chronic Load (Full 30 Days)}}$$
-2. **Foster's Training Monotony & Strain**:
-   $$\text{Monotony} = \frac{\mu_{\text{daily load}}}{\sigma_{\text{daily load}}}, \quad \text{Strain} = \sum \text{Load} \times \text{Monotony}$$
-3. **Training Impulse (TRIMP Proxy)**:
-   $$\text{TRIMP} = 3 \times \text{VeryActiveMinutes} + 2 \times \text{FairlyActiveMinutes} + 1 \times \text{LightlyActiveMinutes}$$
-4. **Cardiac Reserve & Autonomic State**:
-   $$\text{HR Reserve} = \text{Peak Workout HR} - \text{Nocturnal Resting HR (2–6 AM)}$$
-5. **Sleep Architecture & Cumulative Deficit**:
-   $$\text{Sleep Efficiency} = \frac{\text{Minutes Asleep}}{\text{Time In Bed}}, \quad \text{Sleep Deficit} = \sum \max(0, 480 - \text{Minutes Asleep})$$
-
----
-
-## 🧠 4. Predictive Modeling & Ensemble Architecture
-
-The modeling pipeline employs a **multi-stage gradient boosted ensemble** with cross-validated probability calibration and a conditional regression cascade:
-
-```mermaid
-flowchart TD
-    Raw[30-Day Multi-Modal Signals] --> FE[Feature Engineering Engine]
-    FE --> Matrix[Consolidated 3000 x 121 Feature Matrix]
-    
-    Matrix --> CV[5-Fold Stratified Split]
-    
-    CV --> M1[LightGBM Classifier]
-    CV --> M2[XGBoost Classifier]
-    CV --> M3[CatBoost Classifier]
-    CV --> M4[ExtraTrees Classifier]
-    
-    M1 --> Blend[Weighted Probability Blend]
-    M2 --> Blend
-    M3 --> Blend
-    M4 --> Blend
-    
-    Blend --> OptThresh[Cost-Optimized Decision Threshold]
-    OptThresh --> PredA[Task A: injured_in_risk_window]
-    
-    CV --> B1[Task B1: CatBoost/LightGBM Onset Regressor]
-    CV --> B2[Task B2: CatBoost/LightGBM Recovery Regressor]
-    
-    B1 --> PredB1[Task B1: onset_day_offset 1 to 30]
-    B2 --> PredB2[Task B2: recovery_duration 5 to 20]
-    
-    PredA --> Output[sample_submission.csv]
-    PredB1 --> Output
-    PredB2 --> Output
-```
-
-### Models Used:
-* **Task A (Injury Classifier)**:
-  * **LightGBM Classifier**: Depth 6, 350 estimators, `scale_pos_weight=1.2`, feature subsampling 0.8.
-  * **XGBoost Classifier**: Depth 5, 350 estimators, logloss objective with L2 regularization.
-  * **CatBoost Classifier**: Depth 5, 400 iterations, optimized for categorical interactions.
-  * **ExtraTrees Classifier**: 250 estimators, max depth 12, adding non-linear tree diversity.
-* **Task B1 (Onset Day Regressor)**:
-  * Gradient Boosted Regressor trained on injured athletes with **MAE loss function**, predicting integer offset in $[1, 30]$.
-* **Task B2 (Recovery Duration Regressor)**:
-  * Gradient Boosted Regressor capturing sport-specific anatomical load and injury recovery distributions in $[5, 20]$.
-
----
-
-## 📊 5. Evaluation Results & Performance Benchmarks
-
-### 5-Fold Stratified Out-of-Fold Validation Results
-
-| Evaluation Metric | Model Score | Baseline / Random Guess | Relative Improvement |
+| Sport Group | Sports | Mean Recovery (Days) | Range |
 | :--- | :--- | :--- | :--- |
-| **ROC-AUC (Discriminatory Power)** | **`0.941`** | `0.500` | **$+88.2\%$ class separation** |
-| **Task A: Precision** | **`90.62%`** | `35.0%` | **$2.59\times$ reduction in false alarms** |
-| **Task A: Recall** | **`51.52%`** *(tunable up to 71.2%)* | `35.0%` | Prioritizes high-confidence alarms |
-| **Task A: F1-Score** | **`0.6570`** | `0.350` | Balanced harmonic mean |
-| **Task B1: Onset Day MAE (Hits)** | **`0.82 Days`** | `7.61 Days` | **$89.2\%$ error reduction** |
-| **Task B2: Recovery Duration MAE (Hits)** | **`2.90 Days`** | `3.24 Days` | Captures sport bimodality |
+| Contact / Field | Football, Basketball | 14.1–14.5 | 8–20 |
+| Court / Non-Contact | Athletics, Badminton, Tennis, Volleyball | 9.9–10.3 | 5–15 |
 
-### Computational & Runtime Efficiency Benchmarks
-* **Inference Latency per Athlete**: **`0.027 ms`** (Ultra-low latency; ready for wearable edge devices).
-* **Batch Inference Runtime**: **`82.06 ms`** for all 3,000 athletes.
-* **Total Model Ensemble Size**: **`12.67 MB`** (Lightweight footprint).
-* **Training Time**: **`~25 seconds`** for full 5-fold cross-validation.
+---
+
+## ⚙️ 3. Feature Engineering (121 Features)
+
+All features extracted strictly from the **30-day observation window** (Days 1–30). Zero data leakage verified.
+
+| Module | Key Features |
+| :--- | :--- |
+| **Workload & ACWR** | Acute (7d) vs Chronic (30d) step/calorie/intensity ratios, peak spike delta, Week 4 vs Week 1 ramp rate |
+| **Training Load** | Foster's Monotony & Strain, TRIMP proxy (weighted active minutes), session frequency/duration/type ratios |
+| **Sleep** | Sleep efficiency, regularity (CV), cumulative deficit below 480 min, severe deprivation day count, Week 4 sleep drop |
+| **Heart Rate** | Nocturnal resting HR (2–6 AM), peak exertion HR, heart rate reserve, cardiac strain hours (>140 bpm) |
+| **Baselines** | BMI, age, experience ratio, sport type encoding, contact sport flag, prior injury count |
+
+---
+
+## 🧠 4. Model Architecture
+
+**Standalone XGBoost** trained via 5-fold Stratified Cross-Validation.
+
+| Component | Configuration |
+| :--- | :--- |
+| **Task A Classifier** | `XGBClassifier(n_estimators=350, lr=0.025, max_depth=5, subsample=0.85, scale_pos_weight=1.2)` |
+| **Task B1 Onset Regressor** | `XGBRegressor(n_estimators=200, lr=0.03, max_depth=4)` — trained on injured subset only |
+| **Task B2 Recovery Regressor** | `XGBRegressor(n_estimators=200, lr=0.03, max_depth=4)` — trained on injured subset only |
+
+**Why a single model, not an ensemble?** Ablation showed a 4-model blend (LightGBM+XGBoost+CatBoost+ExtraTrees) provided only +0.0008 F1 improvement over standalone XGBoost, with no AUC gain. A single model is simpler to explain, faster to train, and easier to reproduce.
+
+---
+
+## 📊 5. Verified Performance (5-Fold OOF)
+
+### Classification Metrics (Task A)
+
+| Metric | Value |
+| :--- | :--- |
+| **ROC-AUC** | **0.7618** |
+| **F1-Score** | **0.5450** (at competition-optimal threshold) |
+| **Precision** | **39.44%** |
+| **Recall** | **88.19%** |
+| **Decision Threshold** | **0.15** |
+
+### Timing Metrics (Task B)
+
+| Metric | Value | Baseline (Mean Prediction) |
+| :--- | :--- | :--- |
+| **Onset MAE (penalized, all injured)** | **5.62 days** | 7.61 days |
+| **Onset Skill Score** | **0.2625** | 0.0 |
+| **Recovery MAE (penalized, all injured)** | **6.14 days** | 3.24 days |
+| **Recovery Skill Score** | **0.0000** | 0.0 |
+| **Composite Competition Score** | **0.2692** | — |
+
+### Why Threshold = 0.15 Instead of 0.48
+
+The competition penalizes missed injuries with a fixed 30-day error on both timing predictions. This asymmetric penalty makes recall far more valuable than precision:
+
+- At **threshold 0.48** (F1-optimal): F1 = 0.652, Recall = 51.7%, but **509 injured athletes are missed**, each incurring 30-day penalties → Composite Score = **0.217**
+- At **threshold 0.15** (competition-optimal): F1 = 0.545, Recall = 88.2%, only **124 injured athletes missed** → Composite Score = **0.269** (+24% improvement)
+
+The lower threshold accepts more false alarms (lower precision) but dramatically reduces the penalty burden from false negatives, which dominates the competition score.
+
+### Runtime Benchmarks
+
+| Metric | Value |
+| :--- | :--- |
+| Training time (5-fold) | 12.18 seconds |
+| Inference latency (3,000 athletes) | 121.38 ms |
+| Per-athlete latency | 0.04 ms |
+| Model file size | 6.55 MB |
 
 ---
 
@@ -166,67 +120,44 @@ flowchart TD
 
 ```
 Athlete-ML-Model/
-├── dataset(31)/                     # Raw sports biometrics tables (gitignored)
-├── figures/                         # High-resolution performance & EDA charts
-│   ├── 01_sport_and_recovery_analysis.png
-│   ├── 02_workload_spikes_and_acwr.png
-│   ├── 03_model_classification_performance.png
-│   ├── 04_feature_importance.png
-│   └── 05_timing_predictions_evaluation.png
-├── models/                          # Serialized trained model weights (v1 ensemble)
-│   ├── trained_ensemble.joblib
-│   └── pipeline_metadata.joblib
-├── models_v2/                       # Serialized trained model weights (v2 advanced ensemble)
-│   ├── trained_ensemble.joblib
-│   └── pipeline_metadata.joblib
 ├── src/
-│   ├── feature_engineering.py       # Baseline feature extraction pipeline
-│   ├── feature_engineering_v2.py    # Advanced sports science feature extraction
-│   ├── evaluate.py                  # Competition metric & penalty evaluation
-│   ├── train.py                     # 5-fold CV training pipeline (v1)
-│   ├── train_v2.py                  # Advanced 5-fold CV training pipeline (v2)
-│   ├── generate_visualizations.py   # Chart generation script
-│   └── create_presentation.py       # PPT slide generation engine
-├── predict.py                       # End-to-end inference script
-├── sample_submission.csv            # Final predictions (3000 rows)
-├── requirements.txt                 # Dependencies
-└── README.md                        # Complete project documentation
+│   ├── feature_engineering_v2.py   # Feature extraction pipeline (121 features)
+│   ├── train.py                    # 5-fold XGBoost training + threshold optimization
+│   ├── evaluate.py                 # Competition metric computation
+│   ├── generate_visualizations.py  # EDA chart generation
+│   └── create_presentation.py      # PPT slide generation
+├── model/                          # Trained XGBoost model weights
+│   ├── xgboost_pipeline.joblib
+│   └── metadata.joblib
+├── figures/                        # EDA and performance visualizations
+├── predict.py                      # End-to-end inference → sample_submission.csv
+├── sample_submission.csv           # Final 3000-row predictions
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
-## ⚡ 7. Quickstart & Reproduction Guide
+## ⚡ 7. Quickstart
 
-### 1. Clone Repository & Setup Environment
 ```bash
+# 1. Setup
 git clone https://github.com/Dhyan011/Athlete-ML-Model.git
 cd Athlete-ML-Model
-
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-### 2. Run Feature Engineering
-Extracts all 100+ domain features from Days 1–30 observation window:
-```bash
+# 2. Feature Extraction (Days 1–30 only)
 python3 src/feature_engineering_v2.py
-```
 
-### 3. Train Model Ensemble & Cross-Validate
-Trains the 5-Fold Stratified ensemble, computes metrics, and saves model checkpoints:
-```bash
-python3 src/train_v2.py
-```
+# 3. Train + Threshold Optimization
+python3 src/train.py
 
-### 4. Generate Final Predictions
-Runs end-to-end inference and exports `sample_submission.csv`:
-```bash
+# 4. Generate Predictions
 python3 predict.py
 ```
 
 ---
 
-## 🏆 Authors & Acknowledgments
-* **Team Submission for PLAYHACK (ML Track)**
-* Organized by **Sports Board X Technical Board, IIT Guwahati**
+## 🏆 Authors
+Submission for **PLAYHACK ML Track** — IIT Guwahati Sports Board × Technical Board
