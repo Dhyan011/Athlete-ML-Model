@@ -233,50 +233,115 @@ Athlete-ML-Model/
 │   ├── feature_engineering.py   # Full 136-feature extraction pipeline (Days 1–30 only)
 │   ├── train.py                 # 5-fold cross-validated XGBoost training & persistence
 │   ├── evaluate.py              # Official competition scoring and skill metrics
-│   ├── generate_visualizations.py # EDA and model performance figures
-│   └── create_presentation.py   # Automated 16:9 presentation deck builder
+│   └── generate_visualizations.py # 5 high-resolution evaluation figures in figures/
 ├── model/                       # Serialized model weights & metadata
 │   ├── xgboost_pipeline.joblib  # 5-fold classifier and regressor bundles
 │   └── metadata.joblib          # Selected threshold, feature list, and training metrics
 ├── processed_data/              # Cached feature matrices & OOF predictions
+│   ├── master_features.csv
+│   └── oof_predictions.csv
 ├── figures/                     # High-resolution charts (ROC, confusion matrix, ACWR)
 ├── predict.py                   # Inference script generating sample_submission.csv
-├── sample_submission.csv        # Final 3,000-row test predictions
+├── sample_submission.csv        # Final submission output matching competition schema
 ├── requirements.txt             # Locked dependencies
-└── README.md                    # Project documentation
+└── README.md                    # Project documentation & execution guide
 ```
 
 ---
 
-## 9. Quickstart & Reproducibility
+## 9. Getting Started & Execution Guide
 
-### Setup Environment
+Follow this guide to set up the environment, reproduce the training pipeline, and generate predictions.
+
+### Step 1: Environment Setup
+Ensure you have Python 3.10+ installed. Clone the repository and install the dependencies:
+
 ```bash
+# Clone repository
+git clone https://github.com/Dhyan011/Athlete-ML-Model.git
+cd Athlete-ML-Model
+
+# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 1. Extract Features (Days 1–30)
+---
+
+### Step 2: Feature Extraction (Observation Window Only)
+Extract all 136 biomechanical, cardiac, sleep, and workload features strictly from Days 1–30:
+
 ```bash
 python3 src/feature_engineering.py
 ```
-*Outputs: `processed_data/master_features.csv` (Shape: 3000, 145)*
+- **Execution Time**: ~10 seconds.
+- **Output Generated**: `processed_data/master_features.csv` (Shape: `(3000, 145)`).
 
-### 2. Train Models & Optimize Threshold
+---
+
+### Step 3: Model Training & Threshold Calibration
+Train the 5-fold cross-validated XGBoost models (classification + dual timing regressors) and calibrate the decision threshold:
+
 ```bash
 python3 src/train.py
 ```
-*Outputs: `model/xgboost_pipeline.joblib`, `model/metadata.joblib`, `processed_data/oof_predictions.csv`*
+- **Execution Time**: ~8 seconds.
+- **Outputs Generated**:
+  - `model/xgboost_pipeline.joblib`: Serialized 5-fold classifiers and regressors.
+  - `model/metadata.joblib`: Feature schemas, optimal threshold, and validation scores.
+  - `processed_data/oof_predictions.csv`: Full out-of-fold predictions across all 3,000 athletes.
 
-### 3. Run Inference & Validate Submission
+---
+
+### Step 4: Generating Submissions (`sample_submission.csv`)
+Run end-to-end inference to produce the formatted competition submission file:
+
 ```bash
+# Standard inference on default dataset:
 python3 predict.py
-```
-*Outputs: `sample_submission.csv` (Shape: 3000, 4, strict format validation passed)*
 
-### 4. Generate Visualizations & Presentation
+# Or specify custom test directories and output paths:
+python3 predict.py --data_dir "dataset(31)" --output_csv "sample_submission.csv"
+```
+- **Execution Time**: ~120 ms (0.04 ms per athlete).
+- **Validation**: Automatically validates that zero nulls exist, values are within valid integer bounds ($[1, 30]$ for onset, $[5, 20]$ for recovery), and format matches `Example Submission.csv`.
+
+---
+
+### Step 5: Generating Visualizations
+Generate all 5 high-resolution evaluation figures (ROC curves, confusion matrix, ACWR distributions, feature importances):
+
 ```bash
 python3 src/generate_visualizations.py
-python3 src/create_presentation.py
+```
+- **Output Generated**: 5 PNG charts saved to `figures/`.
+
+---
+
+### Programmatic Python Usage
+
+To load and use the trained pipeline directly in your Python code:
+
+```python
+import joblib, pandas as pd
+from src.feature_engineering import extract_features
+
+# 1. Load pipeline artifacts
+models = joblib.load('model/xgboost_pipeline.joblib')
+meta = joblib.load('model/metadata.joblib')
+
+# 2. Extract features for athletes
+df = extract_features(data_dir='dataset(31)', is_train=False)
+X = df[meta['feature_cols']]
+
+# 3. Predict injury probability (averaged across 5 folds)
+probs = sum(clf.predict_proba(X)[:, 1] for clf in models['classifiers']) / 5.0
+pred_labels = (probs >= meta['best_thresh']).astype(int)
+
+# 4. Predict onset day & recovery duration
+pred_onset = sum(reg.predict(X) for reg in models['onset_regressors']) / 5.0
+pred_recovery = sum(reg.predict(X) for reg in models['rec_regressors']) / 5.0
 ```

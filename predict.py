@@ -1,3 +1,4 @@
+import argparse
 import os
 import time
 import joblib
@@ -67,4 +68,10 @@ def generate_predictions(data_dir='dataset(31)',
 
 
 if __name__ == '__main__':
-    generate_predictions()
+    parser = argparse.ArgumentParser(description='Generate predictions matching competition submission schema')
+    parser.add_argument('--data_dir', type=str, default='dataset(31)', help='Path to directory containing input CSVs')
+    parser.add_argument('--output_csv', type=str, default='sample_submission.csv', help='Path for output submission CSV')
+    parser.add_argument('--models_dir', type=str, default='model', help='Path to directory containing trained models')
+    args = parser.parse_args()
+
+    generate_predictions(data_dir=args.data_dir, output_csv=args.output_csv, models_dir=args.models_dir)
